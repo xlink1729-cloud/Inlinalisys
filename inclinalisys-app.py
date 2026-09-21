@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 
 st.set_page_config(
@@ -9,99 +10,167 @@ st.set_page_config(
 st.title("📊 Procesador de Inclinómetro In-Situ (RST IPI)")
 
 # ---------------------------------------------------------
-# 1. METADATOS EXTRAÍDOS DEL REPORTE DE CAMPO
+# 1. METADATOS Y PARÁMETROS DE CONFIGURACIÓN
 # ---------------------------------------------------------
-st.sidebar.header("📍 Parámetros del Pozo (Ficha Técnica)")
-nombre_pozo = st.sidebar.text_input("Identificador del Pozo", value="PROYECTO")
-profundidad_instalacion = st.sidebar.number_input(
-    "Prof. Instalación (m)", value=23.77, format="%.2f"
+st.sidebar.header("📍 Parámetros del Pozo")
+nombre_pozo = st.sidebar.text_input("Identificador", value="PZ-01")
+profundidad_total = st.sidebar.number_input(
+    "Profundidad de Instalación (m)", value=23.77, step=0.01
 )
-no_sensores = st.sidebar.number_input("No. de Sensores / Nodos", value=12)
+no_sensores = st.sidebar.number_input("Número de Nodos", value=12, step=1)
 azimut_eje_a = st.sidebar.number_input("Azimuth Eje A+ (°)", value=5.32)
 
-st.sidebar.subheader("Coordenadas UTM (WGS84)")
-utm_x = st.sidebar.number_input("Coordenada X (Easting)", value=651132.69)
-utm_y = st.sidebar.number_input("Coordenada Y (Northing)", value=2127107.11)
-elevacion_z = st.sidebar.number_input("Elevación Z (msnm)", value=610.19)
+intervalo_l = (
+    profundidad_total / no_sensores if no_sensores > 0 else 1.98
+)  # ~1.98 m
+st.sidebar.info(f"📏 Intervalo por sensor: **{intervalo_l:.2f} m**")
 
-st.sidebar.header("⚙️ Modelo de Sensor")
-marca_modelo = st.sidebar.text_input("Modelo", value="RST IPI27050-70MM")
-constante_k = st.sidebar.number_input(
-    "Constante K (RST)", value=20000, step=1000
-)
-
-# Cálculo automático de intervalo entre nodos
-intervalo_l = profundidad_instalacion / no_sensores if no_sensores > 0 else 0.5
-st.sidebar.info(f"📏 Intervalo calculado entre nodos: **{intervalo_l:.2f} m**")
-
-# Carga de archivo CSV
-uploaded_file = st.sidebar.file_uploader("Cargar archivo CSV", type=["csv"])
+# Carga del archivo CSV limpio
+uploaded_file = st.sidebar.file_uploader("Cargar CSV Limpio", type=["csv"])
 
 # ---------------------------------------------------------
-# 2. TARJETAS DE INFORMACIÓN TÉCNICA
-# ---------------------------------------------------------
-col1, col2, col3, col4, col5 = st.columns(5)
-col1.metric("Pozo", nombre_pozo)
-col2.metric("Profundidad", f"{profundidad_instalacion} m")
-col3.metric("Sensores RST", f"{no_sensores} Nodos")
-col4.metric("Azimuth A+", f"{azimut_eje_a}°")
-col5.metric("Elevación (Z)", f"{elevacion_z} msnm")
-
-st.markdown("---")
-
-# ---------------------------------------------------------
-# 3. PROCESAMIENTO Y GRÁFICAS
+# 2. PROCESAMIENTO DE DATOS DE ARCHIVO DE DATALOGGER
 # ---------------------------------------------------------
 if uploaded_file is not None:
     df = pd.read_csv(uploaded_file)
 
-    st.subheader("Vista Previa de Datos del Inclinómetro")
-    st.dataframe(df.head(12), use_container_width=True)
+    st.subheader("📋 Vista Previa de Datos")
+    st.dataframe(df.head(5), use_container_width=True)
 
-    # Validar que el archivo contenga los 12 sensores
-    if len(df) != no_sensores:
-        st.warning(
-            f"⚠️ Atención: El archivo contiene {len(df)} registros, pero la ficha indica {no_sensores} sensores."
+    # Identificar columnas de sensores Axis A
+    col_axis_a = [c for c in df.columns if c.startswith("Axis A")]
+    col_axis_b = [c for c in df.columns if c.startswith("Axis B")]
+
+    if col_axis_a and "TIMESTAMP" in df.columns:
+        # Selector de Fecha / Lectura
+        st.markdown("---")
+        timestamps = df["TIMESTAMP"].unique()
+        fecha_seleccionada = st.selectbox(
+            "🕒 Selecciona la Fecha y Hora de Lectura:", timestamps
         )
 
-    columnas_req = {"Profundidad", "A0", "A180"}
-    if columnas_req.issubset(df.columns):
-        # 1. Cálculo del Diferencial (A0 - A180) / 2
-        df["Diferencial_A"] = (df["A0"] - df["A180"]) / 2.0
+        # Fila correspondiente a la fecha seleccionada
+        fila_data = df[df["TIMESTAMP"] == fecha_seleccionada].iloc[0]
 
-        # 2. Desplazamiento Incremental en mm usando el intervalo real (1.98 m)
-        df["Disp_Incremental_mm"] = (
-            df["Diferencial_A"] / constante_k
-        ) * (intervalo_l * 1000)
+        # Construir DataFrame por Sensor para esa lectura
+        datos_nodos = []
 
-        # 3. Desplazamiento Acumulado ordenado desde el fondo
-        df = df.sort_values(by="Profundidad", ascending=False)
-        df["Disp_Acumulado_mm"] = df["Disp_Incremental_mm"].cumsum()
-        df["Checksum"] = df["A0"] + df["A180"]
+        # El sensor 1 está arriba y el sensor N al fondo (o viceversa)
+        for i in range(1, no_sensores + 1):
+            col_a = f"Axis A {i}"
+            col_b = f"Axis B {i}"
 
-        # Gráfica interactiva de deformación vs profundidad
-        fig = px.line(
-            df,
-            x="Disp_Acumulado_mm",
-            y="Profundidad",
-            title=f"Perfil de Deformación Acumulada - Inclinómetro RST ({nombre_pozo})",
-            labels={
-                "Disp_Acumulado_mm": "Desplazamiento Acumulado (mm)",
-                "Profundidad": "Profundidad (m)",
-            },
-            markers=True,
+            sin_a = fila_data.get(col_a, np.nan)
+            sin_b = fila_data.get(col_b, np.nan)
+
+            # Filtrar lecturas de error (ej. 0.999998)
+            if abs(sin_a) > 0.5:
+                sin_a = np.nan
+            if abs(sin_b) > 0.5:
+                sin_b = np.nan
+
+            # Profundidad desde la superficie
+            prof = i * intervalo_l
+
+            datos_nodos.append(
+                {
+                    "Nodo": f"Sensor {i}",
+                    "Profundidad_m": prof,
+                    "Sin_A": sin_a,
+                    "Sin_B": sin_b,
+                    # Desplazamiento incremental = sin(theta) * L (en mm)
+                    "Disp_Inc_A_mm": (
+                        sin_a * (intervalo_l * 1000)
+                        if pd.notnull(sin_a)
+                        else 0
+                    ),
+                    "Disp_Inc_B_mm": (
+                        sin_b * (intervalo_l * 1000)
+                        if pd.notnull(sin_b)
+                        else 0
+                    ),
+                }
+            )
+
+        df_procesado = pd.DataFrame(datos_nodos)
+
+        # Ordenar desde el fondo para la suma acumulada
+        df_procesado = df_procesado.sort_values(
+            by="Profundidad_m", ascending=False
         )
-        fig.update_yaxes(
-            autorange="reversed", range=[profundidad_instalacion, 0]
-        )
-        fig.add_vline(
-            x=0, line_dash="dash", line_color="red", annotation_text="Línea Base (0 mm)"
+        df_procesado["Disp_Acum_A_mm"] = df_procesado[
+            "Disp_Inc_A_mm"
+        ].cumsum()
+        df_procesado["Disp_Acum_B_mm"] = df_procesado[
+            "Disp_Inc_B_mm"
+        ].cumsum()
+
+        # Volver a ordenar por profundidad descendente para graficar
+        df_procesado = df_procesado.sort_values(
+            by="Profundidad_m", ascending=True
         )
 
-        st.plotly_chart(fig, use_container_width=True)
+        # ---------------------------------------------------------
+        # 3. VISUALIZACIÓN DE GRÁFICAS (EJE A Y EJE B)
+        # ---------------------------------------------------------
+        st.subheader(f"📈 Perfil Inclinométrico - {fecha_seleccionada}")
+
+        col_g1, col_g2 = st.columns(2)
+
+        with col_g1:
+            fig_a = px.line(
+                df_procesado,
+                x="Disp_Acum_A_mm",
+                y="Profundidad_m",
+                title="Eje Principal (A) - Desplazamiento Acumulado",
+                labels={
+                    "Disp_Acum_A_mm": "Desplazamiento (mm)",
+                    "Profundidad_m": "Profundidad (m)",
+                },
+                markers=True,
+                text="Nodo",
+            )
+            fig_a.update_yaxes(autorange="reversed")
+            fig_a.add_vline(x=0, line_dash="dash", line_color="gray")
+            st.plotly_chart(fig_a, use_container_width=True)
+
+        with col_g2:
+            fig_b = px.line(
+                df_procesado,
+                x="Disp_Acum_B_mm",
+                y="Profundidad_m",
+                title="Eje Transversal (B) - Desplazamiento Acumulado",
+                labels={
+                    "Disp_Acum_B_mm": "Desplazamiento (mm)",
+                    "Profundidad_m": "Profundidad (m)",
+                },
+                markers=True,
+                text="Nodo",
+            )
+            fig_b.update_yaxes(autorange="reversed")
+            fig_b.add_vline(x=0, line_dash="dash", line_color="gray")
+            st.plotly_chart(fig_b, use_container_width=True)
+
+        st.subheader("📄 Tabla de Resultados Procesados")
+        st.dataframe(
+            df_procesado[
+                [
+                    "Nodo",
+                    "Profundidad_m",
+                    "Sin_A",
+                    "Disp_Inc_A_mm",
+                    "Disp_Acum_A_mm",
+                    "Sin_B",
+                    "Disp_Inc_B_mm",
+                    "Disp_Acum_B_mm",
+                ]
+            ],
+            use_container_width=True,
+        )
+
     else:
         st.error(
-            f"El archivo debe tener las columnas básicas: {columnas_req}"
+            "El archivo no contiene las columnas 'TIMESTAMP' o 'Axis A 1'..."
         )
 else:
-    st.info("👈 Carga el archivo CSV con las lecturas de los 12 sensores para ver el perfil.")
+    st.info("👈 Por favor carga el archivo CSV procesado en el panel izquierdo.")
