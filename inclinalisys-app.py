@@ -5,9 +5,9 @@ import plotly.graph_objects as go
 import streamlit as st
 
 st.set_page_config(
-    page_title="Sistema RST IPI - IncliAnalysis", layout="wide"
+    page_title="Sistema RST IPI - IncliAnalysis DT2485", layout="wide"
 )
-st.title("📊 Procesador Inclinométrico In-Situ (IncliAnalysis Suite)")
+st.title("📊 Procesador Inclinométrico In-Situ (Datalogger DT2485)")
 
 # ---------------------------------------------------------
 # 1. PARÁMETROS DEL POZO Y FICHA TÉCNICA
@@ -47,7 +47,7 @@ col5.metric("Elevación (Z)", f"{elevacion_z} msnm")
 st.markdown("---")
 
 # ---------------------------------------------------------
-# 3. MÓDULO DE ANÁLISIS INCLIANALYSIS
+# 3. MÓDULO DE ANÁLISIS Y PROCESAMIENTO DT2485
 # ---------------------------------------------------------
 if uploaded_file is not None:
     df_raw = pd.read_csv(uploaded_file)
@@ -63,23 +63,23 @@ if uploaded_file is not None:
 
         with col_fecha1:
             fecha_base = st.selectbox(
-                "🟢 Selecciona la Lectura BASE (Zero Reading / Inicial):",
+                "🟢 Selecciona la Lectura BASE (Inicial / Zero Reading):",
                 timestamps,
-                index=0,  # Toma la primera lectura guardada como base
+                index=0,  # Toma el primer registro
             )
 
         with col_fecha2:
             fecha_sel = st.selectbox(
                 "🔴 Selecciona la Lectura ACTUAL a Evaluar:",
                 timestamps,
-                index=len(timestamps) - 1,  # Toma la última por defecto
+                index=len(timestamps) - 1,  # Toma el registro más reciente
             )
 
-        # Extraer filas seleccionadas
+        # Extraer filas de las fechas seleccionadas
         fila_base = df_raw[df_raw["TIMESTAMP"] == fecha_base].iloc[0]
         fila_actual = df_raw[df_raw["TIMESTAMP"] == fecha_sel].iloc[0]
 
-        # Construir datos procesados restando la línea base
+        # Procesamiento por cada nodo del DT2485
         datos_sensores = []
         for i in range(1, int(no_sensores) + 1):
             col_a = f"Axis A {i}"
@@ -91,33 +91,32 @@ if uploaded_file is not None:
             raw_base_b = fila_base.get(col_b, np.nan)
             raw_act_b = fila_actual.get(col_b, np.nan)
 
-            # Filtrar errores (ej. 0.999998)
+            # Filtrar valores erróneos o desconexiones (ej. 0.999998)
             if (
                 pd.notnull(raw_act_a)
                 and abs(raw_act_a) > 0.5
-                or abs(raw_base_a) > 0.5
+                or (pd.notnull(raw_base_a) and abs(raw_base_a) > 0.5)
             ):
                 d_sin_a = 0.0
                 val_sin_a = np.nan
             else:
                 val_sin_a = raw_act_a
-                # Cambio respecto a la base: Δsin(θ)
-                d_sin_a = raw_act_a - raw_base_a
+                d_sin_a = raw_act_a - raw_base_a if pd.notnull(raw_act_a) and pd.notnull(raw_base_a) else 0.0
 
             if (
                 pd.notnull(raw_act_b)
                 and abs(raw_act_b) > 0.5
-                or abs(raw_base_b) > 0.5
+                or (pd.notnull(raw_base_b) and abs(raw_base_b) > 0.5)
             ):
                 d_sin_b = 0.0
                 val_sin_b = np.nan
             else:
                 val_sin_b = raw_act_b
-                d_sin_b = raw_act_b - raw_base_b
+                d_sin_b = raw_act_b - raw_base_b if pd.notnull(raw_act_b) and pd.notnull(raw_base_b) else 0.0
 
             prof = i * intervalo_l
 
-            # Desplazamiento Incremental Neto (mm) = Δsin(θ) * L_tramo (mm)
+            # Desplazamiento incremental por tramo (mm) = Δsin(θ) * L (mm)
             disp_inc_a = d_sin_a * (intervalo_l * 1000)
             disp_inc_b = d_sin_b * (intervalo_l * 1000)
 
@@ -134,7 +133,7 @@ if uploaded_file is not None:
 
         df = pd.DataFrame(datos_sensores)
 
-        # Integración acumulada partiendo de la base estable (Fondo = Nodo 12)
+        # Integración acumulada desde el fondo fijo (Nodo 12) hacia la superficie
         df = df.sort_values(by="Profundidad (m)", ascending=False)
         df["Disp_Acum_A (mm)"] = df["Disp_Inc_A (mm)"].cumsum()
         df["Disp_Acum_B (mm)"] = df["Disp_Inc_B (mm)"].cumsum()
@@ -144,7 +143,7 @@ if uploaded_file is not None:
             df["Disp_Acum_A (mm)"] ** 2 + df["Disp_Acum_B (mm)"] ** 2
         )
 
-        # Ordenar desde superficie hacia fondo para graficar
+        # Ordenar de superficie a fondo para graficar
         df = df.sort_values(by="Profundidad (m)", ascending=True)
 
         # ---------------------------------------------------------
@@ -200,13 +199,13 @@ if uploaded_file is not None:
             )
             st.plotly_chart(fig_inc, use_container_width=True)
 
-        # 3. ABSOLUTE PLOT (MUESTRA LA INCLINACIÓN ABSOLUTA / GEOMETRÍA SIN RESTAR BASE)
+        # 3. ABSOLUTE PLOT (MUESTRA LA POSICIÓN FÍSICA SIN RESTAR BASE)
         with tab_abs:
             fig_abs = px.line(
                 df,
                 x="Sin_A",
                 y="Profundidad (m)",
-                title=f"Absolute Position (Geometría Física de la Tubería) [sin(θ)] [{fecha_sel}]",
+                title=f"Absolute Position (Inclinación Real de la Tubería) [sin(θ)] [{fecha_sel}]",
                 labels={
                     "Sin_A": "Seno del Ángulo sin(θ)",
                     "Profundidad (m)": "Profundidad (m)",
@@ -219,7 +218,7 @@ if uploaded_file is not None:
             )
             st.plotly_chart(fig_abs, use_container_width=True)
 
-        # 4. TIME PLOT
+        # 4. TIME PLOT (EVOLUCIÓN TEMPORAL DE UN NODO)
         with tab_time:
             nodo_sel = st.selectbox(
                 "Selecciona el Nodo/Sensor a evaluar en el tiempo:",
@@ -234,7 +233,7 @@ if uploaded_file is not None:
             )
             st.plotly_chart(fig_time, use_container_width=True)
 
-        # 5. VECTOR PLOT
+        # 5. VECTOR PLOT (MAGNITUD TOTAL RESULTANTE A + B)
         with tab_vector:
             fig_vec = px.line(
                 df,
@@ -252,7 +251,7 @@ if uploaded_file is not None:
             )
             st.plotly_chart(fig_vec, use_container_width=True)
 
-        # 6. POLAR PLOT
+        # 6. POLAR PLOT (VISTA PLANTA 2D EJE A VS EJE B)
         with tab_polar:
             fig_polar = px.scatter(
                 df,
@@ -280,6 +279,6 @@ if uploaded_file is not None:
         st.dataframe(df, use_container_width=True)
 
     else:
-        st.error("El archivo no tiene el formato DT2485 esperado.")
+        st.error("El archivo no contiene el formato esperado del DT2485.")
 else:
-    st.info("👈 Carga el archivo CSV del DT2485 para habilitar la suite IncliAnalysis.")
+    st.info("👈 Carga el archivo CSV del DT2485 para iniciar la suite IncliAnalysis.")
