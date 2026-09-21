@@ -4,9 +4,9 @@ import plotly.express as px
 import streamlit as st
 
 st.set_page_config(
-    page_title="Sistema RST IPI - Análisis Inclinométrico", layout="wide"
+    page_title="Sistema RST IPI - Análisis Inclinométrico DT2485", layout="wide"
 )
-st.title("📊 Procesador de Inclinómetro In-Situ (RST IPI)")
+st.title("📊 Procesador de Inclinómetro In-Situ (Datalogger DT2485)")
 
 # ---------------------------------------------------------
 # 1. METADATOS EXTRAÍDOS DEL REPORTE DE CAMPO
@@ -24,18 +24,19 @@ utm_x = st.sidebar.number_input("Coordenada X (Easting)", value=651132.69)
 utm_y = st.sidebar.number_input("Coordenada Y (Northing)", value=2127107.11)
 elevacion_z = st.sidebar.number_input("Elevación Z (msnm)", value=610.19)
 
-st.sidebar.header("⚙️ Modelo de Sensor")
-marca_modelo = st.sidebar.text_input("Modelo", value="RST IPI27050-70MM")
-constante_k = st.sidebar.number_input(
-    "Constante K (RST)", value=20000, step=1000
+st.sidebar.header("⚙️ Modelo de Datalogger")
+marca_modelo = st.sidebar.text_input("Modelo", value="DT2485 IPI Logger")
+
+# Cálculo automático de intervalo entre nodos (Ej. 23.77m / 12 nodos = ~1.98 m por tramo)
+intervalo_l = (
+    profundidad_instalacion / no_sensores if no_sensores > 0 else 1.98
 )
+st.sidebar.info(f"📏 Tramo entre nodos: **{intervalo_l:.2f} m**")
 
-# Cálculo automático de intervalo entre nodos
-intervalo_l = profundidad_instalacion / no_sensores if no_sensores > 0 else 0.5
-st.sidebar.info(f"📏 Intervalo calculado entre nodos: **{intervalo_l:.2f} m**")
-
-# Carga de archivo CSV
-uploaded_file = st.sidebar.file_uploader("Cargar archivo CSV", type=["csv"])
+# Carga del archivo CSV exportado del DT2485
+uploaded_file = st.sidebar.file_uploader(
+    "Cargar archivo CSV (DT2485)", type=["csv"]
+)
 
 # ---------------------------------------------------------
 # 2. TARJETAS DE INFORMACIÓN TÉCNICA
@@ -43,53 +44,84 @@ uploaded_file = st.sidebar.file_uploader("Cargar archivo CSV", type=["csv"])
 col1, col2, col3, col4, col5 = st.columns(5)
 col1.metric("Pozo", nombre_pozo)
 col2.metric("Profundidad", f"{profundidad_instalacion} m")
-col3.metric("Sensores RST", f"{no_sensores} Nodos")
+col3.metric("Sensores IPI", f"{no_sensores} Nodos")
 col4.metric("Azimuth A+", f"{azimut_eje_a}°")
 col5.metric("Elevación (Z)", f"{elevacion_z} msnm")
 
 st.markdown("---")
 
 # ---------------------------------------------------------
-# 3. PROCESAMIENTO Y GRÁFICAS
+# 3. PROCESAMIENTO DE REGISTROS DT2485 Y GRÁFICA
 # ---------------------------------------------------------
 if uploaded_file is not None:
-    df = pd.read_csv(uploaded_file)
+    df_raw = pd.read_csv(uploaded_file)
 
-    st.subheader("Vista Previa de Datos del Inclinómetro")
-    st.dataframe(df.head(12), use_container_width=True)
+    st.subheader("Vista Previa del Registro del DT2485")
+    st.dataframe(df_raw.head(5), use_container_width=True)
 
-    # Validar que el archivo contenga los 12 sensores
-    if len(df) != no_sensores:
-        st.warning(
-            f"⚠️ Atención: El archivo contiene {len(df)} registros, pero la ficha indica {no_sensores} sensores."
+    # Identificar columnas del DT2485
+    col_axis_a = [c for c in df_raw.columns if c.startswith("Axis A")]
+
+    if col_axis_a and "TIMESTAMP" in df_raw.columns:
+        # Selector para explorar cualquier registro guardado en el DT2485
+        timestamps = df_raw["TIMESTAMP"].dropna().unique()
+        fecha_sel = st.selectbox(
+            "🕒 Selecciona la Lectura / Timestamp a Graficar:",
+            timestamps,
+            index=len(timestamps) - 1,  # Por defecto toma la más reciente
         )
 
-    columnas_req = {"Profundidad", "A0", "A180"}
-    if columnas_req.issubset(df.columns):
-        # 1. Cálculo del Diferencial (A0 - A180) / 2
-        df["Diferencial_A"] = (df["A0"] - df["A180"]) / 2.0
+        # Extraer la fila de medición seleccionada
+        fila = df_raw[df_raw["TIMESTAMP"] == fecha_sel].iloc[0]
 
-        # 2. Desplazamiento Incremental en mm usando el intervalo real (1.98 m)
-        df["Disp_Incremental_mm"] = (
-            df["Diferencial_A"] / constante_k
-        ) * (intervalo_l * 1000)
+        # Mapeo de datos por sensor
+        datos_sensores = []
+        for i in range(1, int(no_sensores) + 1):
+            col_a = f"Axis A {i}"
+            val_sin_a = fila.get(col_a, np.nan)
 
-        # 3. Desplazamiento Acumulado ordenado desde el fondo
+            # Filtrar códigos de desconexión/error del DT2485 (ej. 0.999998)
+            if pd.notnull(val_sin_a) and abs(val_sin_a) > 0.5:
+                val_sin_a = np.nan
+
+            prof = i * intervalo_l
+            # Desplazamiento incremental en mm = sin(theta) * L_tramo (mm)
+            disp_inc = (
+                val_sin_a * (intervalo_l * 1000)
+                if pd.notnull(val_sin_a)
+                else 0.0
+            )
+
+            datos_sensores.append(
+                {
+                    "Nodo": f"Nodo {i}",
+                    "Profundidad": prof,
+                    "Sin_A": val_sin_a,
+                    "Disp_Incremental_mm": disp_inc,
+                }
+            )
+
+        df = pd.DataFrame(datos_sensores)
+
+        # Integración acumulada desde la base del pozo hacia la superficie
         df = df.sort_values(by="Profundidad", ascending=False)
         df["Disp_Acumulado_mm"] = df["Disp_Incremental_mm"].cumsum()
-        df["Checksum"] = df["A0"] + df["A180"]
 
-        # Gráfica interactiva de deformación vs profundidad
+        # Reordenar de la superficie hacia el fondo para graficar
+        df = df.sort_values(by="Profundidad", ascending=True)
+
+        # Gráfica interactiva de deformación acumulada
         fig = px.line(
             df,
             x="Disp_Acumulado_mm",
             y="Profundidad",
-            title=f"Perfil de Deformación Acumulada - Inclinómetro RST ({nombre_pozo})",
+            title=f"Perfil de Deformación Acumulada (Eje A) - DT2485 [{fecha_sel}]",
             labels={
                 "Disp_Acumulado_mm": "Desplazamiento Acumulado (mm)",
                 "Profundidad": "Profundidad (m)",
             },
             markers=True,
+            text="Nodo",
         )
         fig.update_yaxes(
             autorange="reversed", range=[profundidad_instalacion, 0]
@@ -99,9 +131,12 @@ if uploaded_file is not None:
         )
 
         st.plotly_chart(fig, use_container_width=True)
+
     else:
         st.error(
-            f"El archivo debe tener las columnas básicas: {columnas_req}"
+            "El archivo cargado no coincide con el formato del logger DT2485 ('TIMESTAMP', 'Axis A 1', ...)."
         )
 else:
-    st.info("👈 Carga el archivo CSV con las lecturas de los 12 sensores para ver el perfil.")
+    st.info(
+        "👈 Carga el archivo CSV del datalogger DT2485 para visualizar el perfil."
+    )
