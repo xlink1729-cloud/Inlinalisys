@@ -35,7 +35,7 @@ uploaded_file = st.sidebar.file_uploader(
 )
 
 # ---------------------------------------------------------
-# 2. METRICAS PRINCIPALES
+# 2. MÉTRICAS PRINCIPALES
 # ---------------------------------------------------------
 col1, col2, col3, col4, col5 = st.columns(5)
 col1.metric("Pozo", nombre_pozo)
@@ -47,7 +47,7 @@ col5.metric("Elevación (Z)", f"{elevacion_z} msnm")
 st.markdown("---")
 
 # ---------------------------------------------------------
-# 3. MÓDULO DE ANÁLISIS INCLIANALYSIS
+# 3. MÓDULO DE ANÁLISIS INCLIANALYSIS Y TABLA DE DATOS
 # ---------------------------------------------------------
 if uploaded_file is not None:
     df_raw = pd.read_csv(uploaded_file)
@@ -76,7 +76,7 @@ if uploaded_file is not None:
             val_sin_a = fila.get(col_a, np.nan)
             val_sin_b = fila.get(col_b, np.nan)
 
-            # Filtrar errores
+            # Filtrar errores (ej. 0.999998)
             if pd.notnull(val_sin_a) and abs(val_sin_a) > 0.5:
                 val_sin_a = np.nan
             if pd.notnull(val_sin_b) and abs(val_sin_b) > 0.5:
@@ -97,25 +97,25 @@ if uploaded_file is not None:
             datos_sensores.append(
                 {
                     "Nodo": f"Nodo {i}",
-                    "Profundidad": prof,
+                    "Profundidad (m)": prof,
                     "Sin_A": val_sin_a,
                     "Sin_B": val_sin_b,
-                    "Disp_Inc_A": disp_inc_a,
-                    "Disp_Inc_B": disp_inc_b,
+                    "Disp_Inc_A (mm)": disp_inc_a,
+                    "Disp_Inc_B (mm)": disp_inc_b,
                 }
             )
 
         df = pd.DataFrame(datos_sensores)
 
-        # Cálculos de Desplazamiento Acumulado desde el fondo
-        df = df.sort_values(by="Profundidad", ascending=False)
-        df["Disp_Acum_A"] = df["Disp_Inc_A"].cumsum()
-        df["Disp_Acum_B"] = df["Disp_Inc_B"].cumsum()
+        # Cálculos de Desplazamiento Acumulado desde el fondo hacia la superficie
+        df = df.sort_values(by="Profundidad (m)", ascending=False)
+        df["Disp_Acum_A (mm)"] = df["Disp_Inc_A (mm)"].cumsum()
+        df["Disp_Acum_B (mm)"] = df["Disp_Inc_B (mm)"].cumsum()
         # Magnitud vectorial combinada (A y B)
-        df["Vector_Resultante"] = np.sqrt(
-            df["Disp_Acum_A"] ** 2 + df["Disp_Acum_B"] ** 2
+        df["Vector_Resultante (mm)"] = np.sqrt(
+            df["Disp_Acum_A (mm)"] ** 2 + df["Disp_Acum_B (mm)"] ** 2
         )
-        df = df.sort_values(by="Profundidad", ascending=True)
+        df = df.sort_values(by="Profundidad (m)", ascending=True)
 
         # ---------------------------------------------------------
         # BARRA DE PESTAÑAS (INCLIANALYSIS TOOLBAR)
@@ -133,12 +133,12 @@ if uploaded_file is not None:
         with tab_cum:
             fig_cum = px.line(
                 df,
-                x="Disp_Acum_A",
-                y="Profundidad",
+                x="Disp_Acum_A (mm)",
+                y="Profundidad (m)",
                 title=f"Cumulative Displacement (Desplazamiento Acumulado) - Eje A [{fecha_sel}]",
                 labels={
-                    "Disp_Acum_A": "Desplazamiento Acumulado (mm)",
-                    "Profundidad": "Profundidad (m)",
+                    "Disp_Acum_A (mm)": "Desplazamiento Acumulado (mm)",
+                    "Profundidad (m)": "Profundidad (m)",
                 },
                 markers=True,
                 text="Nodo",
@@ -153,13 +153,13 @@ if uploaded_file is not None:
         with tab_inc:
             fig_inc = px.bar(
                 df,
-                x="Disp_Inc_A",
-                y="Profundidad",
+                x="Disp_Inc_A (mm)",
+                y="Profundidad (m)",
                 orientation="h",
                 title=f"Incremental Movement (Movimiento por Tramo) - Eje A [{fecha_sel}]",
                 labels={
-                    "Disp_Inc_A": "Movimiento Incremental (mm)",
-                    "Profundidad": "Profundidad (m)",
+                    "Disp_Inc_A (mm)": "Movimiento Incremental (mm)",
+                    "Profundidad (m)": "Profundidad (m)",
                 },
                 text_auto=True,
             )
@@ -173,11 +173,11 @@ if uploaded_file is not None:
             fig_abs = px.line(
                 df,
                 x="Sin_A",
-                y="Profundidad",
-                title=f"Absolute Position / Inclinación Absolute [sin(θ)] [{fecha_sel}]",
+                y="Profundidad (m)",
+                title=f"Absolute Position / Inclinación Absoluta [sin(θ)] [{fecha_sel}]",
                 labels={
                     "Sin_A": "Seno del Ángulo sin(θ)",
-                    "Profundidad": "Profundidad (m)",
+                    "Profundidad (m)": "Profundidad (m)",
                 },
                 markers=True,
             )
@@ -205,12 +205,12 @@ if uploaded_file is not None:
         with tab_vector:
             fig_vec = px.line(
                 df,
-                x="Vector_Resultante",
-                y="Profundidad",
+                x="Vector_Resultante (mm)",
+                y="Profundidad (m)",
                 title=f"Vector Resultante de Desplazamiento (A + B) [{fecha_sel}]",
                 labels={
-                    "Vector_Resultante": "Magnitud Resultante (mm)",
-                    "Profundidad": "Profundidad (m)",
+                    "Vector_Resultante (mm)": "Magnitud Resultante (mm)",
+                    "Profundidad (m)": "Profundidad (m)",
                 },
                 markers=True,
             )
@@ -223,19 +223,26 @@ if uploaded_file is not None:
         with tab_polar:
             fig_polar = px.scatter(
                 df,
-                x="Disp_Acum_A",
-                y="Disp_Acum_B",
+                x="Disp_Acum_A (mm)",
+                y="Disp_Acum_B (mm)",
                 color="Nodo",
                 text="Nodo",
                 title=f"Polar / Plan View Movement (Plano Vista Superior A vs B) [{fecha_sel}]",
                 labels={
-                    "Disp_Acum_A": "Eje A (mm)",
-                    "Disp_Acum_B": "Eje B (mm)",
+                    "Disp_Acum_A (mm)": "Eje A (mm)",
+                    "Disp_Acum_B (mm)": "Eje B (mm)",
                 },
             )
             fig_polar.add_hline(y=0, line_dash="dash", line_color="gray")
             fig_polar.add_vline(x=0, line_dash="dash", line_color="gray")
             st.plotly_chart(fig_polar, use_container_width=True)
+
+        # ---------------------------------------------------------
+        # 4. TABLA DE RESULTADOS PROCESADOS (RESTAURADA)
+        # ---------------------------------------------------------
+        st.markdown("---")
+        st.subheader(f"📋 Tabla de Datos Procesados — Registro: {fecha_sel}")
+        st.dataframe(df, use_container_width=True)
 
     else:
         st.error("El archivo no tiene el formato DT2485 esperado.")
