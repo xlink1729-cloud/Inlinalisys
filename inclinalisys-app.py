@@ -31,7 +31,7 @@ intervalo_l = (
 st.sidebar.info(f"📏 Tramo entre nodos: **{intervalo_l:.2f} m**")
 
 # ---------------------------------------------------------
-# FILTRO DE PROFUNDIDAD
+# FILTRO DE PROFUNDIDAD Y LIMPIEZA
 # ---------------------------------------------------------
 st.sidebar.markdown("---")
 st.sidebar.header("🎯 Filtro de Profundidad")
@@ -48,7 +48,7 @@ uploaded_file = st.sidebar.file_uploader(
 )
 
 # ---------------------------------------------------------
-# 2. MÉTRICAS PRINCIPALES
+# 2. MÉTRICAS PRINCIPALES Y DEPURACIÓN AUTOMÁTICA
 # ---------------------------------------------------------
 col1, col2, col3, col4, col5 = st.columns(5)
 col1.metric("Pozo", nombre_pozo)
@@ -60,15 +60,51 @@ col5.metric("Elevación (Z)", f"{elevacion_z} msnm")
 st.markdown("---")
 
 # ---------------------------------------------------------
-# 3. MÓDULO DE ANÁLISIS INCLIANALYSIS
+# 3. MÓDULO DE DEPURACIÓN Y ANÁLISIS
 # ---------------------------------------------------------
 if uploaded_file is not None:
     df_raw = pd.read_csv(uploaded_file)
 
-    col_axis_a = [c for c in df_raw.columns if c.startswith("Axis A")]
+    # Identificar columnas de los sensores (Axis A y Axis B)
+    cols_sensores = [
+        c
+        for c in df_raw.columns
+        if c.startswith("Axis A") or c.startswith("Axis B")
+    ]
 
-    if col_axis_a and "TIMESTAMP" in df_raw.columns:
-        timestamps = df_raw["TIMESTAMP"].dropna().unique()
+    if cols_sensores and "TIMESTAMP" in df_raw.columns:
+        # ---------------------------------------------------------
+        # FILTRADO Y LIMPIEZA AUTOMÁTICA AL CARGAR
+        # ---------------------------------------------------------
+        df_clean = df_raw.copy()
+
+        # Reemplazar códigos de error típicos (0.999998, -0.999998 o valores desmedidos fuera de [-0.5, 0.5]) por NaN
+        num_errores_detectados = 0
+        for col in cols_sensores:
+            # Convertir a numérico por seguridad
+            df_clean[col] = pd.to_numeric(df_clean[col], errors="coerce")
+
+            # Máscara de detección de errores
+            mask_error = (
+                (df_clean[col].isna())
+                | (df_clean[col].abs() > 0.5)
+                | (df_clean[col].round(4) == 0.9999)
+            )
+
+            num_errores_detectados += mask_error.sum()
+            df_clean.loc[mask_error, col] = np.nan
+
+        # Notificación del filtrado en la interfaz
+        if num_errores_detectados > 0:
+            st.warning(
+                f"🧹 **Filtro de Limpieza Activado:** Se detectaron y descartaron **{num_errores_detectados} lecturas de error o fuera de rango (ej. 0.999998)** del archivo."
+            )
+        else:
+            st.success(
+                "✅ **Calidad de Datos:** El archivo cargado no presenta códigos de error o registros fuera de rango."
+            )
+
+        timestamps = df_clean["TIMESTAMP"].dropna().unique()
 
         col_fecha1, col_fecha2 = st.columns(2)
 
@@ -86,10 +122,10 @@ if uploaded_file is not None:
                 index=len(timestamps) - 1,
             )
 
-        fila_base = df_raw[df_raw["TIMESTAMP"] == fecha_base].iloc[0]
-        fila_actual = df_raw[df_raw["TIMESTAMP"] == fecha_sel].iloc[0]
+        fila_base = df_clean[df_clean["TIMESTAMP"] == fecha_base].iloc[0]
+        fila_actual = df_clean[df_clean["TIMESTAMP"] == fecha_sel].iloc[0]
 
-        # Recolección de Deltas filtradas por profundidad seleccionada
+        # Recolección de Deltas con datos limpios
         nodos_lista = []
         profundidades = []
         disp_inc_a_list = []
@@ -100,7 +136,6 @@ if uploaded_file is not None:
         for i in range(1, int(no_sensores) + 1):
             prof = i * intervalo_l
 
-            # Filtrar por la profundidad máxima seleccionada en el slider
             if prof <= profundidad_max_evaluar + 0.01:
                 col_a = f"Axis A {i}"
                 col_b = f"Axis B {i}"
@@ -111,36 +146,20 @@ if uploaded_file is not None:
                 raw_base_b = fila_base.get(col_b, np.nan)
                 raw_act_b = fila_actual.get(col_b, np.nan)
 
-                # Filtrar lecturas nulas o códigos de error (ej. 0.999998)
-                if (
-                    pd.notnull(raw_act_a)
-                    and abs(raw_act_a) > 0.5
-                    or (pd.notnull(raw_base_a) and abs(raw_base_a) > 0.5)
-                ):
-                    d_sin_a = 0.0
-                    v_a = np.nan
-                else:
+                # Calcular delta si ambas lecturas son numéricas válidas
+                if pd.notnull(raw_act_a) and pd.notnull(raw_base_a):
                     v_a = raw_act_a
-                    d_sin_a = (
-                        raw_act_a - raw_base_a
-                        if pd.notnull(raw_act_a) and pd.notnull(raw_base_a)
-                        else 0.0
-                    )
-
-                if (
-                    pd.notnull(raw_act_b)
-                    and abs(raw_act_b) > 0.5
-                    or (pd.notnull(raw_base_b) and abs(raw_base_b) > 0.5)
-                ):
-                    d_sin_b = 0.0
-                    v_b = np.nan
+                    d_sin_a = raw_act_a - raw_base_a
                 else:
+                    v_a = np.nan
+                    d_sin_a = 0.0
+
+                if pd.notnull(raw_act_b) and pd.notnull(raw_base_b):
                     v_b = raw_act_b
-                    d_sin_b = (
-                        raw_act_b - raw_base_b
-                        if pd.notnull(raw_act_b) and pd.notnull(raw_base_b)
-                        else 0.0
-                    )
+                    d_sin_b = raw_act_b - raw_base_b
+                else:
+                    v_b = np.nan
+                    d_sin_b = 0.0
 
                 nodos_lista.append(f"Nodo {i}")
                 profundidades.append(prof)
@@ -150,7 +169,7 @@ if uploaded_file is not None:
                 disp_inc_b_list.append(d_sin_b * (intervalo_l * 1000))
 
         if len(disp_inc_a_list) > 0:
-            # ACUMULACIÓN DE ABAJO HACIA ARRIBA (Punto Fijo en el nodo más profundo del filtro = 0 mm)
+            # ACUMULACIÓN DE ABAJO HACIA ARRIBA (Punto Fijo = 0 mm en la base del filtro)
             inc_a_rev = disp_inc_a_list[::-1]
             inc_b_rev = disp_inc_b_list[::-1]
 
@@ -252,10 +271,10 @@ if uploaded_file is not None:
                     "Selecciona el Sensor a evaluar en el tiempo:", nodos_disp
                 )
                 fig_time = px.line(
-                    df_raw,
+                    df_clean,
                     x="TIMESTAMP",
                     y=nodo_sel,
-                    title=f"Time Plot - Evolución Temporal en {nodo_sel}",
+                    title=f"Time Plot - Evolución Temporal Limpia en {nodo_sel}",
                     labels={"TIMESTAMP": "Fecha / Hora", nodo_sel: "sin(θ)"},
                 )
                 st.plotly_chart(fig_time, use_container_width=True)
@@ -301,7 +320,7 @@ if uploaded_file is not None:
             # ---------------------------------------------------------
             st.markdown("---")
             st.subheader(
-                f"📋 Tabla de Desplazamiento Neto — Registro: {fecha_sel} vs Base: {fecha_base} (Hasta {profundidad_max_evaluar:.2f} m)"
+                f"📋 Tabla de Desplazamiento Neto Limpio — Registro: {fecha_sel} vs Base: {fecha_base} (Hasta {profundidad_max_evaluar:.2f} m)"
             )
             st.dataframe(df, use_container_width=True)
         else:
