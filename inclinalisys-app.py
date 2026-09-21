@@ -47,7 +47,7 @@ col5.metric("Elevación (Z)", f"{elevacion_z} msnm")
 st.markdown("---")
 
 # ---------------------------------------------------------
-# 3. MÓDULO DE ANÁLISIS INCLIANALYSIS Y TABLA DE DATOS
+# 3. MÓDULO DE ANÁLISIS INCLIANALYSIS
 # ---------------------------------------------------------
 if uploaded_file is not None:
     df_raw = pd.read_csv(uploaded_file)
@@ -56,43 +56,70 @@ if uploaded_file is not None:
     col_axis_a = [c for c in df_raw.columns if c.startswith("Axis A")]
 
     if col_axis_a and "TIMESTAMP" in df_raw.columns:
-        # Selector de Fecha
         timestamps = df_raw["TIMESTAMP"].dropna().unique()
-        fecha_sel = st.selectbox(
-            "🕒 Selecciona Fecha/Hora para Perfil:",
-            timestamps,
-            index=len(timestamps) - 1,
-        )
 
-        # Extraer fila seleccionada
-        fila = df_raw[df_raw["TIMESTAMP"] == fecha_sel].iloc[0]
+        # SELECTORES DE LECTURA BASE Y LECTURA ACTUAL
+        col_fecha1, col_fecha2 = st.columns(2)
 
-        # Construir datos por sensor para esa fecha
+        with col_fecha1:
+            fecha_base = st.selectbox(
+                "🟢 Selecciona la Lectura BASE (Zero Reading / Inicial):",
+                timestamps,
+                index=0,  # Toma la primera lectura guardada como base
+            )
+
+        with col_fecha2:
+            fecha_sel = st.selectbox(
+                "🔴 Selecciona la Lectura ACTUAL a Evaluar:",
+                timestamps,
+                index=len(timestamps) - 1,  # Toma la última por defecto
+            )
+
+        # Extraer filas seleccionadas
+        fila_base = df_raw[df_raw["TIMESTAMP"] == fecha_base].iloc[0]
+        fila_actual = df_raw[df_raw["TIMESTAMP"] == fecha_sel].iloc[0]
+
+        # Construir datos procesados restando la línea base
         datos_sensores = []
         for i in range(1, int(no_sensores) + 1):
             col_a = f"Axis A {i}"
             col_b = f"Axis B {i}"
 
-            val_sin_a = fila.get(col_a, np.nan)
-            val_sin_b = fila.get(col_b, np.nan)
+            raw_base_a = fila_base.get(col_a, np.nan)
+            raw_act_a = fila_actual.get(col_a, np.nan)
+
+            raw_base_b = fila_base.get(col_b, np.nan)
+            raw_act_b = fila_actual.get(col_b, np.nan)
 
             # Filtrar errores (ej. 0.999998)
-            if pd.notnull(val_sin_a) and abs(val_sin_a) > 0.5:
+            if (
+                pd.notnull(raw_act_a)
+                and abs(raw_act_a) > 0.5
+                or abs(raw_base_a) > 0.5
+            ):
+                d_sin_a = 0.0
                 val_sin_a = np.nan
-            if pd.notnull(val_sin_b) and abs(val_sin_b) > 0.5:
+            else:
+                val_sin_a = raw_act_a
+                # Cambio respecto a la base: Δsin(θ)
+                d_sin_a = raw_act_a - raw_base_a
+
+            if (
+                pd.notnull(raw_act_b)
+                and abs(raw_act_b) > 0.5
+                or abs(raw_base_b) > 0.5
+            ):
+                d_sin_b = 0.0
                 val_sin_b = np.nan
+            else:
+                val_sin_b = raw_act_b
+                d_sin_b = raw_act_b - raw_base_b
 
             prof = i * intervalo_l
-            disp_inc_a = (
-                val_sin_a * (intervalo_l * 1000)
-                if pd.notnull(val_sin_a)
-                else 0.0
-            )
-            disp_inc_b = (
-                val_sin_b * (intervalo_l * 1000)
-                if pd.notnull(val_sin_b)
-                else 0.0
-            )
+
+            # Desplazamiento Incremental Neto (mm) = Δsin(θ) * L_tramo (mm)
+            disp_inc_a = d_sin_a * (intervalo_l * 1000)
+            disp_inc_b = d_sin_b * (intervalo_l * 1000)
 
             datos_sensores.append(
                 {
@@ -107,14 +134,17 @@ if uploaded_file is not None:
 
         df = pd.DataFrame(datos_sensores)
 
-        # Cálculos de Desplazamiento Acumulado desde el fondo hacia la superficie
+        # Integración acumulada partiendo de la base estable (Fondo = Nodo 12)
         df = df.sort_values(by="Profundidad (m)", ascending=False)
         df["Disp_Acum_A (mm)"] = df["Disp_Inc_A (mm)"].cumsum()
         df["Disp_Acum_B (mm)"] = df["Disp_Inc_B (mm)"].cumsum()
+
         # Magnitud vectorial combinada (A y B)
         df["Vector_Resultante (mm)"] = np.sqrt(
             df["Disp_Acum_A (mm)"] ** 2 + df["Disp_Acum_B (mm)"] ** 2
         )
+
+        # Ordenar desde superficie hacia fondo para graficar
         df = df.sort_values(by="Profundidad (m)", ascending=True)
 
         # ---------------------------------------------------------
@@ -135,7 +165,7 @@ if uploaded_file is not None:
                 df,
                 x="Disp_Acum_A (mm)",
                 y="Profundidad (m)",
-                title=f"Cumulative Displacement (Desplazamiento Acumulado) - Eje A [{fecha_sel}]",
+                title=f"Cumulative Displacement (Deformación Neta) - Eje A [{fecha_sel} vs Base: {fecha_base}]",
                 labels={
                     "Disp_Acum_A (mm)": "Desplazamiento Acumulado (mm)",
                     "Profundidad (m)": "Profundidad (m)",
@@ -146,7 +176,9 @@ if uploaded_file is not None:
             fig_cum.update_yaxes(
                 autorange="reversed", range=[profundidad_instalacion, 0]
             )
-            fig_cum.add_vline(x=0, line_dash="dash", line_color="red")
+            fig_cum.add_vline(
+                x=0, line_dash="dash", line_color="red", annotation_text="Línea Base (0 mm)"
+            )
             st.plotly_chart(fig_cum, use_container_width=True)
 
         # 2. INCREMENTAL PLOT
@@ -168,25 +200,26 @@ if uploaded_file is not None:
             )
             st.plotly_chart(fig_inc, use_container_width=True)
 
-        # 3. ABSOLUTE PLOT (ÁNGULO / DEFORMACIÓN ABSOLUTA)
+        # 3. ABSOLUTE PLOT (MUESTRA LA INCLINACIÓN ABSOLUTA / GEOMETRÍA SIN RESTAR BASE)
         with tab_abs:
             fig_abs = px.line(
                 df,
                 x="Sin_A",
                 y="Profundidad (m)",
-                title=f"Absolute Position / Inclinación Absoluta [sin(θ)] [{fecha_sel}]",
+                title=f"Absolute Position (Geometría Física de la Tubería) [sin(θ)] [{fecha_sel}]",
                 labels={
                     "Sin_A": "Seno del Ángulo sin(θ)",
                     "Profundidad (m)": "Profundidad (m)",
                 },
                 markers=True,
+                text="Nodo",
             )
             fig_abs.update_yaxes(
                 autorange="reversed", range=[profundidad_instalacion, 0]
             )
             st.plotly_chart(fig_abs, use_container_width=True)
 
-        # 4. TIME PLOT (EVOLUCIÓN EN EL TIEMPO PARA UN NODO)
+        # 4. TIME PLOT
         with tab_time:
             nodo_sel = st.selectbox(
                 "Selecciona el Nodo/Sensor a evaluar en el tiempo:",
@@ -201,7 +234,7 @@ if uploaded_file is not None:
             )
             st.plotly_chart(fig_time, use_container_width=True)
 
-        # 5. VECTOR PLOT (MAGNITUD DE MOVIMIENTO COMBINADO)
+        # 5. VECTOR PLOT
         with tab_vector:
             fig_vec = px.line(
                 df,
@@ -219,7 +252,7 @@ if uploaded_file is not None:
             )
             st.plotly_chart(fig_vec, use_container_width=True)
 
-        # 6. POLAR PLOT (DIRECCIÓN 2D DEL MOVIMIENTO)
+        # 6. POLAR PLOT
         with tab_polar:
             fig_polar = px.scatter(
                 df,
@@ -238,10 +271,12 @@ if uploaded_file is not None:
             st.plotly_chart(fig_polar, use_container_width=True)
 
         # ---------------------------------------------------------
-        # 4. TABLA DE RESULTADOS PROCESADOS (RESTAURADA)
+        # 4. TABLA DE RESULTADOS PROCESADOS
         # ---------------------------------------------------------
         st.markdown("---")
-        st.subheader(f"📋 Tabla de Datos Procesados — Registro: {fecha_sel}")
+        st.subheader(
+            f"📋 Tabla de Desplazamiento Neto — Registro: {fecha_sel} vs Base: {fecha_base}"
+        )
         st.dataframe(df, use_container_width=True)
 
     else:
