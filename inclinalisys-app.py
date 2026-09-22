@@ -20,21 +20,16 @@ profundidad_instalacion = st.sidebar.number_input(
 no_sensores = st.sidebar.number_input("No. de Sensores / Nodos", value=12)
 azimut_eje_a = st.sidebar.number_input("Azimuth Eje A+ (°)", value=5.32)
 
-st.sidebar.subheader("Coordenadas UTM (WGS84)")
-utm_x = st.sidebar.number_input("Coordenada X (Easting)", value=651132.69)
-utm_y = st.sidebar.number_input("Coordenada Y (Northing)", value=2127107.11)
-elevacion_z = st.sidebar.number_input("Elevación Z (msnm)", value=610.19)
-
 intervalo_l = (
     profundidad_instalacion / no_sensores if no_sensores > 0 else 1.98
 )
 st.sidebar.info(f"📏 Tramo entre nodos: **{intervalo_l:.2f} m**")
 
 # ---------------------------------------------------------
-# FILTRO DE PROFUNDIDAD Y LIMPIEZA
+# FILTROS DE PROFUNDIDAD Y MODO DE CÁLCULO (MEAN)
 # ---------------------------------------------------------
 st.sidebar.markdown("---")
-st.sidebar.header("🎯 Filtro de Profundidad")
+st.sidebar.header("🎯 Filtros y Promedio (Mean)")
 profundidad_max_evaluar = st.sidebar.slider(
     "Evaluar hasta profundidad (m):",
     min_value=float(intervalo_l),
@@ -43,29 +38,36 @@ profundidad_max_evaluar = st.sidebar.slider(
     step=float(intervalo_l),
 )
 
+usar_promedio_mean = st.sidebar.checkbox(
+    "📊 Activar Promedio (Mean) de Lecturas",
+    value=False,
+    help="Promedia lecturas dentro de un rango de tiempo para reducir ruido térmico/eléctrico.",
+)
+
 uploaded_file = st.sidebar.file_uploader(
     "Cargar archivo CSV (DT2485)", type=["csv"]
 )
 
 # ---------------------------------------------------------
-# 2. MÉTRICAS PRINCIPALES Y DEPURACIÓN AUTOMÁTICA
+# 2. MÉTRICAS PRINCIPALES
 # ---------------------------------------------------------
 col1, col2, col3, col4, col5 = st.columns(5)
 col1.metric("Pozo", nombre_pozo)
 col2.metric("Prof. Evaluar", f"{profundidad_max_evaluar:.2f} m")
 col3.metric("Sensores IPI", f"{no_sensores} Nodos")
 col4.metric("Azimuth A+", f"{azimut_eje_a}°")
-col5.metric("Elevación (Z)", f"{elevacion_z} msnm")
+col5.metric(
+    "Modo Lectura", "Mean (Promedio)" if usar_promedio_mean else "Punto Único"
+)
 
 st.markdown("---")
 
 # ---------------------------------------------------------
-# 3. MÓDULO DE DEPURACIÓN Y ANÁLISIS
+# 3. MÓDULO DE ANÁLISIS E INTEGRACIÓN MEAN
 # ---------------------------------------------------------
 if uploaded_file is not None:
     df_raw = pd.read_csv(uploaded_file)
 
-    # Identificar columnas de los sensores (Axis A y Axis B)
     cols_sensores = [
         c
         for c in df_raw.columns
@@ -73,59 +75,84 @@ if uploaded_file is not None:
     ]
 
     if cols_sensores and "TIMESTAMP" in df_raw.columns:
-        # ---------------------------------------------------------
-        # FILTRADO Y LIMPIEZA AUTOMÁTICA AL CARGAR
-        # ---------------------------------------------------------
+        # Depuración automática (remueve 0.999998 y nulos)
         df_clean = df_raw.copy()
+        num_errores = 0
 
-        # Reemplazar códigos de error típicos (0.999998, -0.999998 o valores desmedidos fuera de [-0.5, 0.5]) por NaN
-        num_errores_detectados = 0
         for col in cols_sensores:
-            # Convertir a numérico por seguridad
             df_clean[col] = pd.to_numeric(df_clean[col], errors="coerce")
-
-            # Máscara de detección de errores
-            mask_error = (
+            mask_err = (
                 (df_clean[col].isna())
                 | (df_clean[col].abs() > 0.5)
                 | (df_clean[col].round(4) == 0.9999)
             )
+            num_errores += mask_err.sum()
+            df_clean.loc[mask_err, col] = np.nan
 
-            num_errores_detectados += mask_error.sum()
-            df_clean.loc[mask_error, col] = np.nan
-
-        # Notificación del filtrado en la interfaz
-        if num_errores_detectados > 0:
+        if num_errores > 0:
             st.warning(
-                f"🧹 **Filtro de Limpieza Activado:** Se detectaron y descartaron **{num_errores_detectados} lecturas de error o fuera de rango (ej. 0.999998)** del archivo."
-            )
-        else:
-            st.success(
-                "✅ **Calidad de Datos:** El archivo cargado no presenta códigos de error o registros fuera de rango."
+                f"🧹 **Filtro de Limpieza:** Se descartaron **{num_errores} lecturas atípicas (ej. 0.999998)**."
             )
 
         timestamps = df_clean["TIMESTAMP"].dropna().unique()
 
-        col_fecha1, col_fecha2 = st.columns(2)
+        col_f1, col_f2 = st.columns(2)
 
-        with col_fecha1:
-            fecha_base = st.selectbox(
-                "🟢 Selecciona la Lectura BASE (Inicial / Zero Reading):",
-                timestamps,
-                index=0,
+        if not usar_promedio_mean:
+            with col_f1:
+                fecha_base = st.selectbox(
+                    "🟢 Selecciona Lectura BASE:", timestamps, index=0
+                )
+            with col_f2:
+                fecha_sel = st.selectbox(
+                    "🔴 Selecciona Lectura ACTUAL:",
+                    timestamps,
+                    index=len(timestamps) - 1,
+                )
+
+            fila_base = df_clean[df_clean["TIMESTAMP"] == fecha_base].iloc[0]
+            fila_actual = df_clean[df_clean["TIMESTAMP"] == fecha_sel].iloc[0]
+        else:
+            with col_f1:
+                rango_base = st.multiselect(
+                    "🟢 Rango de Fechas para BASE (Calcula Mean):",
+                    timestamps,
+                    default=[timestamps[0]],
+                )
+            with col_f2:
+                rango_actual = st.multiselect(
+                    "🔴 Rango de Fechas para ACTUAL (Calcula Mean):",
+                    timestamps,
+                    default=[timestamps[-1]],
+                )
+
+            fecha_base = (
+                f"Mean ({len(rango_base)} muestras)"
+                if rango_base
+                else timestamps[0]
+            )
+            fecha_sel = (
+                f"Mean ({len(rango_actual)} muestras)"
+                if rango_actual
+                else timestamps[-1]
             )
 
-        with col_fecha2:
-            fecha_sel = st.selectbox(
-                "🔴 Selecciona la Lectura ACTUAL a Evaluar:",
-                timestamps,
-                index=len(timestamps) - 1,
-            )
+            df_base_sub = df_clean[
+                df_clean["TIMESTAMP"].isin(
+                    rango_base if rango_base else [timestamps[0]]
+                )
+            ]
+            df_act_sub = df_clean[
+                df_clean["TIMESTAMP"].isin(
+                    rango_actual if rango_actual else [timestamps[-1]]
+                )
+            ]
 
-        fila_base = df_clean[df_clean["TIMESTAMP"] == fecha_base].iloc[0]
-        fila_actual = df_clean[df_clean["TIMESTAMP"] == fecha_sel].iloc[0]
+            # Cálculo de la media (Mean) por columna
+            fila_base = df_base_sub[cols_sensores].mean()
+            fila_actual = df_act_sub[cols_sensores].mean()
 
-        # Recolección de Deltas con datos limpios
+        # Recolección y cálculo de deltas
         nodos_lista = []
         profundidades = []
         disp_inc_a_list = []
@@ -146,7 +173,6 @@ if uploaded_file is not None:
                 raw_base_b = fila_base.get(col_b, np.nan)
                 raw_act_b = fila_actual.get(col_b, np.nan)
 
-                # Calcular delta si ambas lecturas son numéricas válidas
                 if pd.notnull(raw_act_a) and pd.notnull(raw_base_a):
                     v_a = raw_act_a
                     d_sin_a = raw_act_a - raw_base_a
@@ -169,7 +195,7 @@ if uploaded_file is not None:
                 disp_inc_b_list.append(d_sin_b * (intervalo_l * 1000))
 
         if len(disp_inc_a_list) > 0:
-            # ACUMULACIÓN DE ABAJO HACIA ARRIBA (Punto Fijo = 0 mm en la base del filtro)
+            # Acumulación de abajo hacia arriba (Base fija = 0 mm)
             inc_a_rev = disp_inc_a_list[::-1]
             inc_b_rev = disp_inc_b_list[::-1]
 
@@ -183,8 +209,8 @@ if uploaded_file is not None:
             df = pd.DataFrame({
                 "Nodo": nodos_lista,
                 "Profundidad (m)": profundidades,
-                "Sin_A": sin_a_act,
-                "Sin_B": sin_b_act,
+                "Sin_A (Mean)": sin_a_act,
+                "Sin_B (Mean)": sin_b_act,
                 "Disp_Inc_A (mm)": disp_inc_a_list,
                 "Disp_Acum_A (mm)": disp_acum_a,
                 "Disp_Inc_B (mm)": disp_inc_b_list,
@@ -193,24 +219,33 @@ if uploaded_file is not None:
             })
 
             # ---------------------------------------------------------
-            # BARRA DE PESTAÑAS (INCLIANALYSIS TOOLBAR)
+            # BARRA DE PESTAÑAS (CON MÓDULO MEAN ADICIONAL)
             # ---------------------------------------------------------
-            tab_cum, tab_inc, tab_abs, tab_time, tab_vector, tab_polar = st.tabs([
+            (
+                tab_cum,
+                tab_inc,
+                tab_abs,
+                tab_mean,
+                tab_time,
+                tab_vector,
+                tab_polar,
+            ) = st.tabs([
                 "📊 Cumulative",
                 "📉 Incremental",
                 "📐 Absolute",
-                "📈 Time Plot",
+                "📈 Mean Analysis",
+                "⏱️ Time Plot",
                 "🧭 Vector Plot",
                 "🎯 Polar Plot",
             ])
 
-            # 1. CUMULATIVE PLOT
+            # 1. CUMULATIVE
             with tab_cum:
                 fig_cum = px.line(
                     df,
                     x="Disp_Acum_A (mm)",
                     y="Profundidad (m)",
-                    title=f"Cumulative Displacement (Deformación Neta hasta {profundidad_max_evaluar:.2f} m) - Eje A [{fecha_sel} vs Base: {fecha_base}]",
+                    title=f"Cumulative Displacement - Eje A [{fecha_sel} vs Base: {fecha_base}]",
                     labels={
                         "Disp_Acum_A (mm)": "Desplazamiento Acumulado (mm)",
                         "Profundidad (m)": "Profundidad (m)",
@@ -222,22 +257,18 @@ if uploaded_file is not None:
                     autorange="reversed", range=[profundidad_max_evaluar, 0]
                 )
                 fig_cum.add_vline(
-                    x=0, line_dash="dash", line_color="red", annotation_text="Línea Base (0 mm)"
+                    x=0, line_dash="dash", line_color="red", annotation_text="Base (0 mm)"
                 )
                 st.plotly_chart(fig_cum, use_container_width=True)
 
-            # 2. INCREMENTAL PLOT
+            # 2. INCREMENTAL
             with tab_inc:
                 fig_inc = px.bar(
                     df,
                     x="Disp_Inc_A (mm)",
                     y="Profundidad (m)",
                     orientation="h",
-                    title=f"Incremental Movement (Movimiento por Tramo) - Eje A [{fecha_sel}]",
-                    labels={
-                        "Disp_Inc_A (mm)": "Movimiento Incremental (mm)",
-                        "Profundidad (m)": "Profundidad (m)",
-                    },
+                    title="Incremental Movement (Movimiento por Tramo) - Eje A",
                     text_auto=True,
                 )
                 fig_inc.update_yaxes(
@@ -245,17 +276,13 @@ if uploaded_file is not None:
                 )
                 st.plotly_chart(fig_inc, use_container_width=True)
 
-            # 3. ABSOLUTE PLOT
+            # 3. ABSOLUTE
             with tab_abs:
                 fig_abs = px.line(
                     df,
-                    x="Sin_A",
+                    x="Sin_A (Mean)",
                     y="Profundidad (m)",
-                    title=f"Absolute Position (Geometría Física de la Tubería) [sin(θ)] [{fecha_sel}]",
-                    labels={
-                        "Sin_A": "Seno del Ángulo sin(θ)",
-                        "Profundidad (m)": "Profundidad (m)",
-                    },
+                    title="Absolute Position [sin(θ)]",
                     markers=True,
                     text="Nodo",
                 )
@@ -264,7 +291,35 @@ if uploaded_file is not None:
                 )
                 st.plotly_chart(fig_abs, use_container_width=True)
 
-            # 4. TIME PLOT
+            # 4. MEAN ANALYSIS (PROMEDIO Y DISPERSIÓN DENTRO DEL PERFIL)
+            with tab_mean:
+                fig_mean = go.Figure()
+                fig_mean.add_trace(
+                    go.Bar(
+                        x=df["Nodo"],
+                        y=df["Disp_Acum_A (mm)"],
+                        name="Mean Acumulado A (mm)",
+                        marker_color="teal",
+                    )
+                )
+                fig_mean.add_trace(
+                    go.Bar(
+                        x=df["Nodo"],
+                        y=df["Disp_Acum_B (mm)"],
+                        name="Mean Acumulado B (mm)",
+                        marker_color="coral",
+                    )
+                )
+                fig_mean.update_layout(
+                    title="Análisis Estadístico Promedio (Mean) por Nodo",
+                    xaxis_title="Nodo / Sensor",
+                    yaxis_title="Desplazamiento Promedio (mm)",
+                    barmode="group",
+                    template="plotly_white",
+                )
+                st.plotly_chart(fig_mean, use_container_width=True)
+
+            # 5. TIME PLOT
             with tab_time:
                 nodos_disp = [f"Axis A {n.split(' ')[1]}" for n in nodos_lista]
                 nodo_sel = st.selectbox(
@@ -274,22 +329,18 @@ if uploaded_file is not None:
                     df_clean,
                     x="TIMESTAMP",
                     y=nodo_sel,
-                    title=f"Time Plot - Evolución Temporal Limpia en {nodo_sel}",
+                    title=f"Time Plot - Evolución Temporal en {nodo_sel}",
                     labels={"TIMESTAMP": "Fecha / Hora", nodo_sel: "sin(θ)"},
                 )
                 st.plotly_chart(fig_time, use_container_width=True)
 
-            # 5. VECTOR PLOT
+            # 6. VECTOR PLOT
             with tab_vector:
                 fig_vec = px.line(
                     df,
                     x="Vector_Resultante (mm)",
                     y="Profundidad (m)",
-                    title=f"Vector Resultante de Desplazamiento (A + B) [{fecha_sel}]",
-                    labels={
-                        "Vector_Resultante (mm)": "Magnitud Resultante (mm)",
-                        "Profundidad (m)": "Profundidad (m)",
-                    },
+                    title="Vector Resultante de Desplazamiento (A + B)",
                     markers=True,
                 )
                 fig_vec.update_yaxes(
@@ -297,7 +348,7 @@ if uploaded_file is not None:
                 )
                 st.plotly_chart(fig_vec, use_container_width=True)
 
-            # 6. POLAR PLOT
+            # 7. POLAR PLOT
             with tab_polar:
                 fig_polar = px.scatter(
                     df,
@@ -305,26 +356,20 @@ if uploaded_file is not None:
                     y="Disp_Acum_B (mm)",
                     color="Nodo",
                     text="Nodo",
-                    title=f"Polar / Plan View Movement (Plano Vista Superior A vs B) [{fecha_sel}]",
-                    labels={
-                        "Disp_Acum_A (mm)": "Eje A (mm)",
-                        "Disp_Acum_B (mm)": "Eje B (mm)",
-                    },
+                    title="Polar / Plan View Movement (Vista Superior A vs B)",
                 )
                 fig_polar.add_hline(y=0, line_dash="dash", line_color="gray")
                 fig_polar.add_vline(x=0, line_dash="dash", line_color="gray")
                 st.plotly_chart(fig_polar, use_container_width=True)
 
             # ---------------------------------------------------------
-            # 4. TABLA DE RESULTADOS PROCESADOS
+            # TABLA DE RESULTADOS
             # ---------------------------------------------------------
             st.markdown("---")
             st.subheader(
-                f"📋 Tabla de Desplazamiento Neto Limpio — Registro: {fecha_sel} vs Base: {fecha_base} (Hasta {profundidad_max_evaluar:.2f} m)"
+                f"📋 Tabla de Desplazamientos Procesados (Mean) — Hasta {profundidad_max_evaluar:.2f} m"
             )
             st.dataframe(df, use_container_width=True)
-        else:
-            st.warning("La profundidad seleccionada es menor al primer nodo.")
 
     else:
         st.error("El archivo no tiene el formato DT2485 esperado.")
