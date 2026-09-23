@@ -36,6 +36,7 @@ profundidad_max_evaluar = st.sidebar.slider(
     max_value=float(profundidad_instalacion),
     value=float(profundidad_instalacion),
     step=float(intervalo_l),
+    help="Según la norma ASTM D6230, el cálculo acumulativo debe iniciar en la base fija empotrada.",
 )
 
 usar_promedio_mean = st.sidebar.checkbox(
@@ -231,6 +232,7 @@ if uploaded_file is not None:
                 tab_vel,
                 tab_vector,
                 tab_polar,
+                tab_normas,
             ) = st.tabs([
                 "📊 Acumulativo",
                 "📉 Incremental",
@@ -240,6 +242,7 @@ if uploaded_file is not None:
                 "🚀 Tasa de Deformación",
                 "🧭 Vector Resultante",
                 "🎯 Vista en Planta",
+                "📖 Marco Normativo",
             ])
 
             # 1. CUMULATIVE DISPLACEMENT
@@ -491,6 +494,44 @@ if uploaded_file is not None:
                 fig_polar.add_hline(y=0, line_dash="dash", line_color="gray")
                 fig_polar.add_vline(x=0, line_dash="dash", line_color="gray")
                 st.plotly_chart(fig_polar, use_container_width=True)
+
+            # 9. MARCO NORMATIVO Y FUNDAMENTO TÉCNICO
+            with tab_normas:
+                st.subheader(
+                    "📖 Marco Normativo y Fundamentos Geotécnicos"
+                )
+
+                col_n1, col_n2 = st.columns(2)
+
+                with col_n1:
+                    st.markdown("""
+                    ### 📐 Norma ASTM D6230
+                    *Standard Test Method for Monitoring Ground Movement Using Inclinometers*
+
+                    El procesamiento matemático ejecutado en esta plataforma sigue estrictamente las especificaciones de la norma internacional **ASTM D6230**:
+
+                    1. **Geometría del Sensor:** La deformación incremental por tramo ($\delta_i$) se calcula convirtiendo la lectura de salida en seno del ángulo ($\sin\\theta$) a desplazamiento lineal mediante:
+                       $$\delta_i = (\sin\\theta_{\text{actual}} - \sin\\theta_{\text{base}}) \times L$$
+                       *Donde $L$ es la distancia entre centros de sensores ($1.98\text{ m} = 1980\text{ mm}$).*
+
+                    2. **Condición de Borde Fijo (Anclaje Inferior):** De acuerdo con el estándar, el extremo inferior empotrado en terreno firme o roca sana es considerado como el **origen estático inamovible ($0.00\text{ mm}$)**, acumulando los desplazamientos de abajo hacia arriba (`bottom-up`).
+                    """)
+
+                with col_n2:
+                    st.markdown("""
+                    ### 🚦 Umbrales de Seguridad (Dunnicliff, 1993)
+                    *Geotechnical Instrumentation for Monitoring Field Performance*
+
+                    Los semáforos de alerta configurados en la pestaña **Tasa de Deformación** se fundamentan en los criterios de velocidad recomendados por Dunnicliff y el US Army Corps of Engineers (USACE):
+
+                    * **🟢 Alerta Verde (< 0.5 mm/mes):** Movimientos dentro del rango de variaciones elásticas normales del terreno o fluctuaciones por dilatación térmica.
+                    * **🟡 Alerta Amarilla (0.5 – 2.0 mm/mes):** Tasa de deformación continua observable. Se requiere incrementar la frecuencia de monitoreo y evaluar condiciones hidráulicas/carga.
+                    * **🔴 Alerta Roja (> 2.0 mm/mes):** Tasa de aceleración crítica de la masa del terreno. Requiere aviso inmediato al especialista geotécnico para implementar medidas de mitigación.
+                    """)
+
+                st.info(
+                    "💡 **Nota de Cumplimiento:** El módulo de depuración automática remueve lecturas erróneas fuera del rango $[-0.5, 0.5] \\sin\\theta$ o códigos de falla del datalogger (`0.999998`), cumpliendo con los controles de calidad de datos exigidos por la norma."
+                )
 
             # ---------------------------------------------------------
             # 4. TABLA DE RESULTADOS PROCESADOS
