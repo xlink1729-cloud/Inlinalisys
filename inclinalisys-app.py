@@ -234,7 +234,7 @@ if uploaded_file is not None:
                 "📊 Acumulativo",
                 "📉 Incremental",
                 "📐 Absoluto",
-                "📈 Mean Analysis",
+                "📈 Análisis de Promedios",
                 "⏱️ Time Plot",
                 "🧭 Vector Plot",
                 "🎯 Polar Plot",
