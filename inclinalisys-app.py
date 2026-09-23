@@ -228,25 +228,27 @@ if uploaded_file is not None:
                 tab_abs,
                 tab_mean,
                 tab_time,
+                tab_vel,
                 tab_vector,
                 tab_polar,
             ) = st.tabs([
                 "📊 Acumulativo",
                 "📉 Incremental",
                 "📐 Absoluto",
-                "📈 Análisis de Promedios",
-                "⏱️ Time Plot",
-                "🧭 Vector Plot",
-                "🎯 Polar Plot",
+                "📈 Análisis Promedio",
+                "⏱️ Evolución Temporal",
+                "🚀 Tasa de Deformación",
+                "🧭 Vector Resultante",
+                "🎯 Vista en Planta",
             ])
 
-            # 1. CUMULATIVE DISPLACEMENT (LÍNEA CONTINUA CON MARCADORES)
+            # 1. CUMULATIVE DISPLACEMENT
             with tab_cum:
                 fig_cum = px.line(
                     df,
                     x="Disp_Acum_A (mm)",
                     y="Profundidad (m)",
-                    title=f"Cumulative Displacement - Eje A [{fecha_sel} vs Base: {fecha_base}]",
+                    title=f"Desplazamiento Acumulado - Eje A [{fecha_sel} vs Base: {fecha_base}]",
                     labels={
                         "Disp_Acum_A (mm)": "Desplazamiento Acumulado (mm)",
                         "Profundidad (m)": "Profundidad (m)",
@@ -258,17 +260,20 @@ if uploaded_file is not None:
                     autorange="reversed", range=[profundidad_max_evaluar, 0]
                 )
                 fig_cum.add_vline(
-                    x=0, line_dash="dash", line_color="red", annotation_text="Base (0 mm)"
+                    x=0,
+                    line_dash="dash",
+                    line_color="red",
+                    annotation_text="Base (0 mm)",
                 )
                 st.plotly_chart(fig_cum, use_container_width=True)
 
-            # 2. INCREMENTAL MOVEMENT (LÍNEA CONTINUA EN LUGAR DE BARRAS)
+            # 2. INCREMENTAL MOVEMENT
             with tab_inc:
                 fig_inc = px.line(
                     df,
                     x="Disp_Inc_A (mm)",
                     y="Profundidad (m)",
-                    title=f"Incremental Movement (Movimiento por Tramo) - Eje A [{fecha_sel}]",
+                    title=f"Movimiento Incremental (Por Tramo) - Eje A [{fecha_sel}]",
                     labels={
                         "Disp_Inc_A (mm)": "Desplazamiento Incremental (mm)",
                         "Profundidad (m)": "Profundidad (m)",
@@ -288,7 +293,7 @@ if uploaded_file is not None:
                     df,
                     x="Sin_A",
                     y="Profundidad (m)",
-                    title=f"Absolute Position (Geometría Física de la Tubería) [sin(θ)] [{fecha_sel}]",
+                    title=f"Posición Absoluta (Geometría Física de la Tubería) [sin(θ)] [{fecha_sel}]",
                     labels={
                         "Sin_A": "Seno del Ángulo sin(θ)",
                         "Profundidad (m)": "Profundidad (m)",
@@ -301,7 +306,7 @@ if uploaded_file is not None:
                 )
                 st.plotly_chart(fig_abs, use_container_width=True)
 
-            # 4. MEAN ANALYSIS (GRÁFICA MULTILÍNEA COMPARATIVA A VS B)
+            # 4. MEAN ANALYSIS
             with tab_mean:
                 fig_mean = go.Figure()
                 fig_mean.add_trace(
@@ -309,7 +314,7 @@ if uploaded_file is not None:
                         x=df["Disp_Acum_A (mm)"],
                         y=df["Profundidad (m)"],
                         mode="lines+markers+text",
-                        name="Mean Acumulado A (mm)",
+                        name="Promedio Acumulado A (mm)",
                         text=df["Nodo"],
                         textposition="top right",
                         line=dict(color="blue", width=2),
@@ -320,14 +325,14 @@ if uploaded_file is not None:
                         x=df["Disp_Acum_B (mm)"],
                         y=df["Profundidad (m)"],
                         mode="lines+markers+text",
-                        name="Mean Acumulado B (mm)",
+                        name="Promedio Acumulado B (mm)",
                         text=df["Nodo"],
                         textposition="top right",
                         line=dict(color="green", width=2),
                     )
                 )
                 fig_mean.update_layout(
-                    title="Análisis Estadístico Promedio (Mean) por Perfil",
+                    title="Análisis Estadístico Promedio por Perfil",
                     xaxis_title="Desplazamiento Promedio (mm)",
                     yaxis_title="Profundidad (m)",
                     yaxis=dict(autorange="reversed"),
@@ -346,12 +351,111 @@ if uploaded_file is not None:
                     df_clean,
                     x="TIMESTAMP",
                     y=nodo_sel,
-                    title=f"Time Plot - Evolución Temporal en {nodo_sel}",
+                    title=f"Evolución Temporal en {nodo_sel}",
                     labels={"TIMESTAMP": "Fecha / Hora", nodo_sel: "sin(θ)"},
                 )
                 st.plotly_chart(fig_time, use_container_width=True)
 
-            # 6. VECTOR PLOT
+            # 6. TASA DE DEFORMACIÓN / VELOCIDAD DE MOVIMIENTO
+            with tab_vel:
+                st.subheader(
+                    "🚀 Tasa de Deformación / Velocidad de Movimiento"
+                )
+
+                if not usar_promedio_mean:
+                    try:
+                        t_b = pd.to_datetime(fecha_base)
+                        t_a = pd.to_datetime(fecha_sel)
+                        dias_transcurridos = (t_a - t_b).days
+                    except Exception:
+                        dias_transcurridos = 0
+                else:
+                    dias_transcurridos = 30  # Estimación en caso de modo Mean
+
+                if dias_transcurridos <= 0:
+                    st.warning(
+                        "⚠️ Para calcular la tasa de velocidad, la **Lectura ACTUAL** debe ser posterior en el tiempo a la **Lectura BASE**."
+                    )
+                else:
+                    meses_transcurridos = dias_transcurridos / 30.4375
+
+                    # Cálculo de velocidad por nodo en mm/mes
+                    df["Velocidad_A (mm/mes)"] = (
+                        df["Disp_Acum_A (mm)"] / meses_transcurridos
+                    )
+                    df["Velocidad_B (mm/mes)"] = (
+                        df["Disp_Acum_B (mm)"] / meses_transcurridos
+                    )
+
+                    # Identificación del nodo crítico
+                    idx_max = df["Velocidad_A (mm/mes)"].abs().idxmax()
+                    nodo_critico = df.loc[idx_max, "Nodo"]
+                    vel_max = df.loc[idx_max, "Velocidad_A (mm/mes)"]
+                    prof_critica = df.loc[idx_max, "Profundidad (m)"]
+                    disp_max = df.loc[idx_max, "Disp_Acum_A (mm)"]
+
+                    # Tarjetas Métrica (KPIs)
+                    kpi1, kpi2, kpi3 = st.columns(3)
+                    kpi1.metric(
+                        "Tiempo Transcurrido",
+                        f"{dias_transcurridos} días",
+                        f"{meses_transcurridos:.1f} meses",
+                    )
+                    kpi2.metric(
+                        f"Velocidad Máxima ({nodo_critico})",
+                        f"{abs(vel_max):.3f} mm/mes",
+                        f"A {prof_critica:.2f} m prof.",
+                        delta_color="off",
+                    )
+                    kpi3.metric(
+                        "Desplazamiento Acumulado Máx.",
+                        f"{disp_max:.2f} mm",
+                        "Eje A",
+                    )
+
+                    # Semáforo de Alerta Geotécnica
+                    vel_abs = abs(vel_max)
+                    if vel_abs < 0.5:
+                        st.success(
+                            "🟢 **Estado: ESTABLE (Alerta Verde)** — La velocidad de deformación es menor a 0.5 mm/mes. Comportamiento dentro de tolerancias normales."
+                        )
+                    elif 0.5 <= vel_abs <= 2.0:
+                        st.warning(
+                            "🟡 **Estado: PRECAUCIÓN (Alerta Amarilla)** — Velocidad entre 0.5 y 2.0 mm/mes. Se sugiere monitorear con mayor frecuencia."
+                        )
+                    else:
+                        st.error(
+                            "🔴 **Estado: CRÍTICO (Alerta Roja)** — Velocidad superior a 2.0 mm/mes. Aceleración registrada. Notificar al especialista geotécnico."
+                        )
+
+                    # Gráfica de perfil de velocidad vs profundidad
+                    fig_vel = go.Figure()
+                    fig_vel.add_trace(
+                        go.Scatter(
+                            x=df["Velocidad_A (mm/mes)"],
+                            y=df["Profundidad (m)"],
+                            mode="lines+markers+text",
+                            name="Velocidad Eje A (mm/mes)",
+                            text=df["Nodo"],
+                            textposition="top right",
+                            line=dict(color="#2ca02c", width=2.5),
+                            marker=dict(size=8, symbol="diamond"),
+                        )
+                    )
+                    fig_vel.add_vline(
+                        x=0, line_dash="dash", line_color="gray", opacity=0.7
+                    )
+                    fig_vel.update_layout(
+                        title=f"Perfil de Velocidad de Movimiento [{fecha_sel} vs Base: {fecha_base}]",
+                        xaxis_title="Velocidad de Deformación (mm/mes)",
+                        yaxis_title="Profundidad (m)",
+                        yaxis=dict(autorange="reversed"),
+                        template="plotly_white",
+                        height=550,
+                    )
+                    st.plotly_chart(fig_vel, use_container_width=True)
+
+            # 7. VECTOR PLOT
             with tab_vector:
                 fig_vec = px.line(
                     df,
@@ -370,7 +474,7 @@ if uploaded_file is not None:
                 )
                 st.plotly_chart(fig_vec, use_container_width=True)
 
-            # 7. POLAR PLOT
+            # 8. POLAR PLOT
             with tab_polar:
                 fig_polar = px.scatter(
                     df,
@@ -378,7 +482,7 @@ if uploaded_file is not None:
                     y="Disp_Acum_B (mm)",
                     color="Nodo",
                     text="Nodo",
-                    title=f"Polar / Plan View Movement (Plano Vista Superior A vs B) [{fecha_sel}]",
+                    title=f"Vista en Planta / Deformación Bi-Axial (A vs B) [{fecha_sel}]",
                     labels={
                         "Disp_Acum_A (mm)": "Eje A (mm)",
                         "Disp_Acum_B (mm)": "Eje B (mm)",
@@ -402,4 +506,6 @@ if uploaded_file is not None:
     else:
         st.error("El archivo no tiene el formato DT2485 esperado.")
 else:
-    st.info("👈 Carga el archivo CSV del DT2485 para habilitar la suite IncliAnalysis.")
+    st.info(
+        "👈 Carga el archivo CSV del DT2485 para habilitar la suite IncliAnalysis."
+    )
