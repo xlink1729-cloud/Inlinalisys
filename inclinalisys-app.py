@@ -45,7 +45,6 @@ def procesar_y_estandarizar_csv(file):
         df.columns = nuevas_columnas
 
         # Relleno de seguridad para Eje B en cadenas uniaxiales (IC7570 / CR6)
-        # Esto evita fallos al calcular vectores o gráficos biaxiales
         for i in range(1, nodo_counter):
             col_b = f"Axis B {i}"
             if col_b not in df.columns:
@@ -62,10 +61,25 @@ def procesar_y_estandarizar_csv(file):
 
 
 # ---------------------------------------------------------
-# 1. PARÁMETROS DEL POZO Y FICHA TÉCNICA
+# 1. PARÁMETROS DEL POZO Y FICHA TÉCNICA (CON COORDENADAS)
 # ---------------------------------------------------------
 st.sidebar.header("📍 Parámetros del Pozo (Ficha Técnica)")
 nombre_pozo = st.sidebar.text_input("Identificador del Pozo", value="PROYECTO")
+
+# --- UBICACIÓN GEORREFERENCIADA ---
+st.sidebar.subheader("🌐 Ubicación Georreferenciada")
+coord_este = st.sidebar.number_input(
+    "Coordenada Este (X / UTM)", value=500000.00, format="%.2f"
+)
+coord_norte = st.sidebar.number_input(
+    "Coordenada Norte (Y / UTM)", value=2800000.00, format="%.2f"
+)
+cota_z = st.sidebar.number_input(
+    "Cota / Elevación Z (m.s.n.m.)", value=150.00, format="%.2f"
+)
+
+# --- CONFIGURACIÓN FÍSICA ---
+st.sidebar.subheader("⚙️ Configuración Física")
 profundidad_instalacion = st.sidebar.number_input(
     "Prof. Instalación Total (m)", value=23.77, format="%.2f"
 )
@@ -106,12 +120,10 @@ uploaded_file = st.sidebar.file_uploader(
 # ---------------------------------------------------------
 col1, col2, col3, col4, col5 = st.columns(5)
 col1.metric("Pozo", nombre_pozo)
-col2.metric("Prof. Evaluar", f"{profundidad_max_evaluar:.2f} m")
-col3.metric("Sensores IPI", f"{no_sensores} Nodos")
-col4.metric("Azimuth A+", f"{azimut_eje_a}°")
-col5.metric(
-    "Modo Lectura", "Mean (Promedio)" if usar_promedio_mean else "Punto Único"
-)
+col2.metric("Ubicación UTM (E / N)", f"{coord_este:.1f} / {coord_norte:.1f}")
+col3.metric("Cota Z", f"{cota_z:.2f} msnm")
+col4.metric("Prof. Evaluar", f"{profundidad_max_evaluar:.2f} m")
+col5.metric("Azimuth A+", f"{azimut_eje_a}°")
 
 st.markdown("---")
 
@@ -119,7 +131,6 @@ st.markdown("---")
 # 3. PROCESAMIENTO Y ANÁLISIS
 # ---------------------------------------------------------
 if uploaded_file is not None:
-    # Carga con estandarización universal
     df_raw = procesar_y_estandarizar_csv(uploaded_file)
 
     cols_sensores = [
@@ -129,7 +140,6 @@ if uploaded_file is not None:
     ]
 
     if cols_sensores and "TIMESTAMP" in df_raw.columns:
-        # Depuración automática (remueve 0.999998 y lecturas desmedidas)
         df_clean = df_raw.copy()
         num_errores = 0
 
@@ -250,7 +260,6 @@ if uploaded_file is not None:
                 disp_inc_b_list.append(d_sin_b * (intervalo_l * 1000))
 
         if len(disp_inc_a_list) > 0:
-            # Acumulación de abajo hacia arriba (Punto fijo en la base del filtro)
             inc_a_rev = disp_inc_a_list[::-1]
             inc_b_rev = disp_inc_b_list[::-1]
 
@@ -261,9 +270,16 @@ if uploaded_file is not None:
             disp_acum_b = acum_b_rev[::-1]
             vector_resultante = np.sqrt(disp_acum_a**2 + disp_acum_b**2)
 
+            # --- CONSTRUCCIÓN DEL DATAFRAME CON DATOS GEORREFERENCIADOS ---
             df = pd.DataFrame({
+                "Pozo": nombre_pozo,
+                "Coord_Este_X": coord_este,
+                "Coord_Norte_Y": coord_norte,
                 "Nodo": nodos_lista,
                 "Profundidad (m)": profundidades,
+                "Cota_Nodo_Z (msnm)": [
+                    cota_z - p for p in profundidades
+                ],  # Cota calculada para cada nodo
                 "Sin_A": sin_a_act,
                 "Sin_B": sin_b_act,
                 "Disp_Inc_A (mm)": disp_inc_a_list,
@@ -545,9 +561,7 @@ if uploaded_file is not None:
 
             # 9. MARCO NORMATIVO Y FUNDAMENTO TÉCNICO
             with tab_normas:
-                st.subheader(
-                    "📖 Marco Normativo y Fundamentos Geotécnicos"
-                )
+                st.subheader("📖 Marco Normativo y Fundamentos Geotécnicos")
 
                 col_n1, col_n2 = st.columns(2)
 
@@ -582,7 +596,7 @@ if uploaded_file is not None:
                 )
 
             # ---------------------------------------------------------
-            # 4. TABLA DE RESULTADOS PROCESADOS
+            # 4. TABLA DE RESULTADOS PROCESADOS CON DATOS GEORREFERENCIADOS
             # ---------------------------------------------------------
             st.markdown("---")
             st.subheader(
@@ -593,7 +607,9 @@ if uploaded_file is not None:
             st.warning("La profundidad seleccionada es menor al primer nodo.")
 
     else:
-        st.error("El archivo cargado no contiene columnas reconocibles de sensores DT2485 ni CR6.")
+        st.error(
+            "El archivo cargado no contiene columnas reconocibles de sensores DT2485 ni CR6."
+        )
 else:
     st.info(
         "👈 Carga un archivo CSV (DT2485 o CR6/ELGL4000) para habilitar la suite IncliAnalysis."
