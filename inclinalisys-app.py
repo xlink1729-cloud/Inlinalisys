@@ -10,6 +10,45 @@ st.set_page_config(
 st.title("📊 Procesador Inclinométrico In-Situ (IncliAnalysis Suite)")
 
 # ---------------------------------------------------------
+# FUNCIÓN DE ADAPTACIÓN Y COMPATIBILIDAD DE ARCHIVOS
+# ---------------------------------------------------------
+def procesar_y_estandarizar_csv(file):
+    """
+    Detecta automáticamente si el archivo proviene de un logger DT2485
+    o de un sistema CR6/ELGL4000, estandarizando los nombres de columnas.
+    """
+    df = pd.read_csv(file)
+    cols_originales = df.columns.tolist()
+    
+    # Verificación de formato CR6 / ELGL4000
+    tiene_sin_angle = any("SIN_Angle" in str(c) for c in cols_originales)
+    
+    if tiene_sin_angle:
+        nuevas_columnas = []
+        nodo_counter = 1
+        
+        for col in cols_originales:
+            col_str = str(col).strip()
+            if "TIMESTAMP" in col_str.upper():
+                nuevas_columnas.append("TIMESTAMP")
+            elif "RECORD" in col_str.upper():
+                nuevas_columnas.append("RECORD")
+            elif "SIN_ANGLE" in col_str.upper():
+                nuevas_columnas.append(f"Axis A {nodo_counter}")
+            elif col_str.upper() == "C" or col_str.startswith("C."):
+                nuevas_columnas.append(f"Temp {nodo_counter}")
+                nodo_counter += 1
+            else:
+                nuevas_columnas.append(col)
+                
+        df.columns = nuevas_columnas
+        st.info("ℹ️ **Formato Detectado:** Registrador Campbell Scientific CR6 / Interfaz ELGL4000 (Mapeo dinámico activado).")
+    else:
+        st.info("ℹ️ **Formato Detectado:** Datalogger RST DT2485.")
+        
+    return df
+
+# ---------------------------------------------------------
 # 1. PARÁMETROS DEL POZO Y FICHA TÉCNICA
 # ---------------------------------------------------------
 st.sidebar.header("📍 Parámetros del Pozo (Ficha Técnica)")
@@ -46,7 +85,7 @@ usar_promedio_mean = st.sidebar.checkbox(
 )
 
 uploaded_file = st.sidebar.file_uploader(
-    "Cargar archivo CSV (DT2485)", type=["csv"]
+    "Cargar archivo CSV (DT2485 o CR6/ELGL4000)", type=["csv"]
 )
 
 # ---------------------------------------------------------
@@ -67,7 +106,8 @@ st.markdown("---")
 # 3. PROCESAMIENTO Y ANÁLISIS
 # ---------------------------------------------------------
 if uploaded_file is not None:
-    df_raw = pd.read_csv(uploaded_file)
+    # Carga con estandarización universal
+    df_raw = procesar_y_estandarizar_csv(uploaded_file)
 
     cols_sensores = [
         c
@@ -373,7 +413,7 @@ if uploaded_file is not None:
                     except Exception:
                         dias_transcurridos = 0
                 else:
-                    dias_transcurridos = 30  # Estimación en caso de modo Mean
+                    dias_transcurridos = 30
 
                 if dias_transcurridos <= 0:
                     st.warning(
@@ -382,7 +422,6 @@ if uploaded_file is not None:
                 else:
                     meses_transcurridos = dias_transcurridos / 30.4375
 
-                    # Cálculo de velocidad por nodo en mm/mes
                     df["Velocidad_A (mm/mes)"] = (
                         df["Disp_Acum_A (mm)"] / meses_transcurridos
                     )
@@ -390,14 +429,12 @@ if uploaded_file is not None:
                         df["Disp_Acum_B (mm)"] / meses_transcurridos
                     )
 
-                    # Identificación del nodo crítico
                     idx_max = df["Velocidad_A (mm/mes)"].abs().idxmax()
                     nodo_critico = df.loc[idx_max, "Nodo"]
                     vel_max = df.loc[idx_max, "Velocidad_A (mm/mes)"]
                     prof_critica = df.loc[idx_max, "Profundidad (m)"]
                     disp_max = df.loc[idx_max, "Disp_Acum_A (mm)"]
 
-                    # Tarjetas Métrica (KPIs)
                     kpi1, kpi2, kpi3 = st.columns(3)
                     kpi1.metric(
                         "Tiempo Transcurrido",
@@ -416,7 +453,6 @@ if uploaded_file is not None:
                         "Eje A",
                     )
 
-                    # Semáforo de Alerta Geotécnica
                     vel_abs = abs(vel_max)
                     if vel_abs < 0.5:
                         st.success(
@@ -431,7 +467,6 @@ if uploaded_file is not None:
                             "🔴 **Estado: CRÍTICO (Alerta Roja)** — Velocidad superior a 2.0 mm/mes. Aceleración registrada. Notificar al especialista geotécnico."
                         )
 
-                    # Gráfica de perfil de velocidad vs profundidad
                     fig_vel = go.Figure()
                     fig_vel.add_trace(
                         go.Scatter(
@@ -545,8 +580,8 @@ if uploaded_file is not None:
             st.warning("La profundidad seleccionada es menor al primer nodo.")
 
     else:
-        st.error("El archivo no tiene el formato DT2485 esperado.")
+        st.error("El archivo cargado no contiene columnas reconocibles de sensores DT2485 ni CR6.")
 else:
     st.info(
-        "👈 Carga el archivo CSV del DT2485 para habilitar la suite IncliAnalysis."
+        "👈 Carga un archivo CSV (DT2485 o CR6/ELGL4000) para habilitar la suite IncliAnalysis."
     )
