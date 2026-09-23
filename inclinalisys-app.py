@@ -142,11 +142,11 @@ if uploaded_file is not None:
     if cols_sensores and "TIMESTAMP" in df_raw.columns:
         df_clean = df_raw.copy()
         num_errores = 0
-
+        
         if cols_sensores and "TIMESTAMP" in df_raw.columns:
-        df_clean = df_raw.copy()
-        num_errores = 0
-
+            df_clean = df_raw.copy()
+            num_errores = 0
+        
         for col in cols_sensores:
             df_clean[col] = pd.to_numeric(df_clean[col], errors="coerce")
             
