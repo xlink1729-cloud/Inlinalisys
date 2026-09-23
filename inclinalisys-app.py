@@ -143,19 +143,30 @@ if uploaded_file is not None:
         df_clean = df_raw.copy()
         num_errores = 0
 
+        if cols_sensores and "TIMESTAMP" in df_raw.columns:
+        df_clean = df_raw.copy()
+        num_errores = 0
+
         for col in cols_sensores:
             df_clean[col] = pd.to_numeric(df_clean[col], errors="coerce")
+            
+            # Ajustamos la tolerancia a 0.3 sin(θ) para capturar picos ruidosos aislados
             mask_err = (
                 (df_clean[col].isna())
-                | (df_clean[col].abs() > 0.5)
+                | (df_clean[col].abs() > 0.3)
                 | (df_clean[col].round(4) == 0.9999)
             )
             num_errores += mask_err.sum()
             df_clean.loc[mask_err, col] = np.nan
 
+        # Interpola linealmente los nodos descartados para no dejar saltos vacíos
+        df_clean[cols_sensores] = df_clean[cols_sensores].interpolate(
+            method="linear", limit=2, axis=1
+        )
+
         if num_errores > 0:
             st.warning(
-                f"🧹 **Filtro de Limpieza:** Se descartaron **{num_errores} lecturas atípicas (ej. 0.999998)**."
+                f"🧹 **Filtro de Limpieza:** Se detectaron e interpolaron **{num_errores} lecturas atípicas/ruido**."
             )
 
         timestamps = df_clean["TIMESTAMP"].dropna().unique()
