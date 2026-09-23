@@ -9,24 +9,25 @@ st.set_page_config(
 )
 st.title("📊 Procesador Inclinométrico In-Situ (IncliAnalysis Suite)")
 
+
 # ---------------------------------------------------------
-# FUNCIÓN DE ADAPTACIÓN Y COMPATIBILIDAD DE ARCHIVOS
+# FUNCIÓN DE ADAPTACIÓN Y COMPATIBILIDAD DE ARCHIVOS MULTIFORMATO
 # ---------------------------------------------------------
 def procesar_y_estandarizar_csv(file):
     """
     Detecta automáticamente si el archivo proviene de un logger DT2485
-    o de un sistema CR6/ELGL4000, estandarizando los nombres de columnas.
+    o de un sistema CR6/ELGL4000 (Inclinómetro IC7570), estandarizando columnas.
     """
     df = pd.read_csv(file)
     cols_originales = df.columns.tolist()
-    
+
     # Verificación de formato CR6 / ELGL4000
     tiene_sin_angle = any("SIN_Angle" in str(c) for c in cols_originales)
-    
+
     if tiene_sin_angle:
         nuevas_columnas = []
         nodo_counter = 1
-        
+
         for col in cols_originales:
             col_str = str(col).strip()
             if "TIMESTAMP" in col_str.upper():
@@ -40,13 +41,25 @@ def procesar_y_estandarizar_csv(file):
                 nodo_counter += 1
             else:
                 nuevas_columnas.append(col)
-                
+
         df.columns = nuevas_columnas
-        st.info("ℹ️ **Formato Detectado:** Registrador Campbell Scientific CR6 / Interfaz ELGL4000 (Mapeo dinámico activado).")
+
+        # Relleno de seguridad para Eje B en cadenas uniaxiales (IC7570 / CR6)
+        # Esto evita fallos al calcular vectores o gráficos biaxiales
+        for i in range(1, nodo_counter):
+            col_b = f"Axis B {i}"
+            if col_b not in df.columns:
+                df[col_b] = 0.0
+
+        st.info(
+            f"ℹ️ **Formato Detectado:** Registrador Campbell Scientific CR6 / Interfaz ELGL4000 "
+            f"({nodo_counter - 1} Nodos detectados - Inclinómetro IC7570)."
+        )
     else:
         st.info("ℹ️ **Formato Detectado:** Datalogger RST DT2485.")
-        
+
     return df
+
 
 # ---------------------------------------------------------
 # 1. PARÁMETROS DEL POZO Y FICHA TÉCNICA
@@ -212,8 +225,8 @@ if uploaded_file is not None:
                 raw_base_a = fila_base.get(col_a, np.nan)
                 raw_act_a = fila_actual.get(col_a, np.nan)
 
-                raw_base_b = fila_base.get(col_b, np.nan)
-                raw_act_b = fila_actual.get(col_b, np.nan)
+                raw_base_b = fila_base.get(col_b, 0.0)
+                raw_act_b = fila_actual.get(col_b, 0.0)
 
                 if pd.notnull(raw_act_a) and pd.notnull(raw_base_a):
                     v_a = raw_act_a
@@ -226,7 +239,7 @@ if uploaded_file is not None:
                     v_b = raw_act_b
                     d_sin_b = raw_act_b - raw_base_b
                 else:
-                    v_b = np.nan
+                    v_b = 0.0
                     d_sin_b = 0.0
 
                 nodos_lista.append(f"Nodo {i}")
