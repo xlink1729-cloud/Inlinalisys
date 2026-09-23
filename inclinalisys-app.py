@@ -231,9 +231,9 @@ if uploaded_file is not None:
                 tab_vector,
                 tab_polar,
             ) = st.tabs([
-                "📊 Cumulative",
+                "📊 Acumulativo",
                 "📉 Incremental",
-                "📐 Absolute",
+                "📐 Absoluto",
                 "📈 Mean Analysis",
                 "⏱️ Time Plot",
                 "🧭 Vector Plot",
